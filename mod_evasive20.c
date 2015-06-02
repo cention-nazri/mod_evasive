@@ -38,6 +38,18 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "http_log.h"
 #include "http_request.h"
 
+/* 2.3.16 and above use client_ip instead of remote_ip */
+#if (AP_SERVER_MAJORVERSION_NUMBER > 2) \
+    || (AP_SERVER_MAJORVERSION_NUMBER == 2 \
+	&& AP_SERVER_MINORVERSION_NUMBER >= 4) \
+    || (AP_SERVER_MAJORVERSION_NUMBER == 2 \
+	&& AP_SERVER_MINORVERSION_NUMBER == 3 \
+	&& AP_SERVER_PATCHLEVEL_NUMBER >= 16)
+#define request_ip(r) ((r)->connection->client_ip)
+#else
+#define request_ip(r) ((r)->connection->remote_ip)
+#endif
+
 module AP_MODULE_DECLARE_DATA evasive20_module;
 
 /* BEGIN DoS Evasive Maneuvers Definitions */
@@ -139,11 +151,11 @@ static int access_checker(request_rec *r)
       time_t t = time(NULL);
 
       /* Check whitelist */
-      if (is_whitelisted(r->connection->remote_ip)) 
+      if (is_whitelisted(request_ip(r)))
         return OK;
 
       /* First see if the IP itself is on "hold" */
-      n = ntt_find(hit_list, r->connection->remote_ip);
+      n = ntt_find(hit_list, request_ip(r));
 
       if (n != NULL && t-n->timestamp<blocking_period) {
  
@@ -155,14 +167,14 @@ static int access_checker(request_rec *r)
       } else {
 
         /* Has URI been hit too much? */
-        snprintf(hash_key, 2048, "%s_%s", r->connection->remote_ip, r->uri);
+        snprintf(hash_key, 2048, "%s_%s", request_ip(r), r->uri);
         n = ntt_find(hit_list, hash_key);
         if (n != NULL) {
 
           /* If URI is being hit too much, add to "hold" list and 403 */
           if (t-n->timestamp<page_interval && n->count>=page_count) {
             ret = HTTP_FORBIDDEN;
-            ntt_insert(hit_list, r->connection->remote_ip, time(NULL));
+            ntt_insert(hit_list, request_ip(r), time(NULL));
           } else {
 
             /* Reset our hit count list as necessary */
@@ -177,14 +189,14 @@ static int access_checker(request_rec *r)
         }
 
         /* Has site been hit too much? */
-        snprintf(hash_key, 2048, "%s_SITE", r->connection->remote_ip);
+        snprintf(hash_key, 2048, "%s_SITE", request_ip(r));
         n = ntt_find(hit_list, hash_key);
         if (n != NULL) {
 
           /* If site is being hit too much, add to "hold" list and 403 */
           if (t-n->timestamp<site_interval && n->count>=site_count) {
             ret = HTTP_FORBIDDEN;
-            ntt_insert(hit_list, r->connection->remote_ip, time(NULL));
+            ntt_insert(hit_list, request_ip(r), time(NULL));
           } else {
 
             /* Reset our hit count list as necessary */
@@ -205,27 +217,27 @@ static int access_checker(request_rec *r)
         struct stat s;
         FILE *file;
 
-        snprintf(filename, sizeof(filename), "%s/dos-%s", log_dir != NULL ? log_dir : DEFAULT_LOG_DIR, r->connection->remote_ip);
+        snprintf(filename, sizeof(filename), "%s/dos-%s", log_dir != NULL ? log_dir : DEFAULT_LOG_DIR, request_ip(r));
         if (stat(filename, &s)) {
           file = fopen(filename, "w");
           if (file != NULL) {
             fprintf(file, "%ld\n", getpid());
             fclose(file);
 
-            LOG(LOG_ALERT, "Blacklisting address %s: possible DoS attack.", r->connection->remote_ip);
+            LOG(LOG_ALERT, "Blacklisting address %s: possible DoS attack.", request_ip(r));
             if (email_notify != NULL) {
               snprintf(filename, sizeof(filename), MAILER, email_notify);
               file = popen(filename, "w");
               if (file != NULL) {
                 fprintf(file, "To: %s\n", email_notify);
-                fprintf(file, "Subject: HTTP BLACKLIST %s\n\n", r->connection->remote_ip);
-                fprintf(file, "mod_evasive HTTP Blacklisted %s\n", r->connection->remote_ip);
+                fprintf(file, "Subject: HTTP BLACKLIST %s\n\n", request_ip(r));
+                fprintf(file, "mod_evasive HTTP Blacklisted %s\n", request_ip(r));
                 pclose(file);
               }
             }
 
             if (system_command != NULL) {
-              snprintf(filename, sizeof(filename), system_command, r->connection->remote_ip);
+              snprintf(filename, sizeof(filename), system_command, request_ip(r));
               system(filename);
             }
  
